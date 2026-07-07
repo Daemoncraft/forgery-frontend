@@ -1,7 +1,8 @@
 # Foundry – Frontend
 
-Angular-20-Frontend des persistenten Browser-Management-MMOs **Foundry**:
-Standalone Components, Signals, Tailwind, PWA. Spricht die REST-API des Backends.
+Angular-22-Frontend des persistenten Browser-Management-MMOs **Foundry**:
+Standalone Components, Signals, zoneless, Tailwind, PWA. Spricht die REST-API
+des Backends. Package Manager ist **Bun** (`bun.lock`, kein `package-lock.json`).
 
 Backend (Kotlin/Spring Boot, API-Vertrag, Spiel-Kanon, gemeinsame Doku):
 https://github.com/Daemoncraft/forgery-backend
@@ -13,16 +14,15 @@ per [proxy.conf.json](proxy.conf.json) an das lokal laufende Backend
 (`http://localhost:8080`, siehe Backend-Repo `docker-compose.dev.yml`) weitergeleitet:
 
 ```bash
-npm install
-npm start   # ng serve --proxy-config proxy.conf.json → http://localhost:4200
+bun install
+bun start        # ng serve (Proxy via angular.json) → http://localhost:4200
+bun run build    # Produktions-Build → dist/foundry-frontend/browser
+bun run test     # Unit-Tests (Vitest, @angular/build:unit-test)
 ```
 
-> **Bekannter Zustand:** Das Angular-Workspace-Gerüst (`angular.json`,
-> `tsconfig*.json`, `src/main.ts`, `src/index.html`, Lockfile, PWA-Konfiguration)
-> ist noch nicht angelegt (Ticket FND-003 im Backlog) — `npm install`/`ng build`
-> funktionieren erst danach. Der vorhandene Code unter `src/app/` (Stores,
-> Interceptors, Guards, Models, Dashboard-Referenz-Feature) ist die Vorlage dafür.
-> Eine CI wird eingerichtet, sobald der Build läuft.
+> Hinweis: Die Angular-22-CLI verlangt Node.js ≥ 22.22.3 (oder ≥ 24.15 / ≥ 26)
+> als Laufzeit für `ng` — Bun ersetzt npm als Package Manager/Task Runner,
+> nicht die Node-Runtime der CLI.
 
 ## Referenz-Dokumente
 

@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+/*
+ * Design-Token (docs/06 §4.1): Dark Mode als Default, Light Mode per
+ * class-Strategie (html.light), prefers-color-scheme als Initialwert.
+ * Templates greifen per Tailwind-Arbitrary-Values zu, z. B. bg-[var(--surface)].
+ */
+:root {
+  --bg: #0b0f14;
+  --surface: #141a22;
+  --surface-2: #1c2430;
+  --border: #26303d;
+  --text: #e8edf2;
+  --text-muted: #8a97a6;
+  --primary: #38bdf8;
+  --accent: #f59e0b;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  color-scheme: dark;
+}
+
+:root.light {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef1f5;
+  --border: #dde3ea;
+  --text: #111827;
+  --text-muted: #6b7280;
+  --primary: #0284c7;
+  --accent: #d97706;
+  --success: #059669;
+  --warning: #b45309;
+  --danger: #dc2626;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not(.dark) {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --surface-2: #eef1f5;
+    --border: #dde3ea;
+    --text: #111827;
+    --text-muted: #6b7280;
+    --primary: #0284c7;
+    --accent: #d97706;
+    --success: #059669;
+    --warning: #b45309;
+    --danger: #dc2626;
+    color-scheme: light;
+  }
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  min-height: 100dvh;
+}

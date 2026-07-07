@@ -1,4 +1,10 @@
 node_modules/
 dist/
 .angular/
+out-tsc/
 *.log
+.git/
+Dockerfile
+nginx.conf
+docs/
+README.md
