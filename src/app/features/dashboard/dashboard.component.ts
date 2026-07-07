@@ -1,26 +1,48 @@
-import { PercentPipe } from '@angular/common';
-import {
-  ChangeDetectionStrategy,
-  Component,
-  DestroyRef,
-  OnInit,
-  computed,
-  inject,
-  signal,
-} from '@angular/core';
+import { DatePipe, PercentPipe } from '@angular/common';
+import { ChangeDetectionStrategy, Component, OnInit, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { AuthStore } from '../../core/auth/auth.store';
 import { CompactNumberPipe } from '../../shared/pipes/compact-number.pipe';
 import { DashboardStore } from './dashboard.store';
 
 @Component({
   selector: 'app-dashboard',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, CompactNumberPipe, PercentPipe],
+  imports: [RouterLink, CompactNumberPipe, PercentPipe, DatePipe],
   template: `
     <div class="mx-auto max-w-6xl space-y-6 p-4 lg:p-6">
-      <h1 class="text-xl font-semibold text-[var(--text)]">Dashboard</h1>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 class="text-xl font-semibold text-[var(--text)]">Dashboard</h1>
+          @if (auth.currentPlayer(); as player) {
+            <p class="text-sm text-[var(--text-muted)]">
+              {{ auth.playerName() }} · Level {{ player.level }} · {{ player.xp }} XP
+            </p>
+          }
+        </div>
+        <div class="flex items-center gap-3">
+          @if (store.lastCalculatedAt(); as at) {
+            <span class="text-xs text-[var(--text-muted)]">
+              Stand (Serverzeit): {{ at | date: 'HH:mm:ss' }}
+            </span>
+          }
+          <button
+            type="button"
+            (click)="collect()"
+            [disabled]="store.collecting() || store.loading()"
+            class="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--bg)] disabled:opacity-50"
+          >
+            {{ store.collecting() ? 'Sammle …' : '⛏ Produktion einsammeln' }}
+          </button>
+        </div>
+      </div>
 
-      @if (store.loading() && !store.loaded()) {
+      @if (store.error(); as message) {
+        <div class="rounded-xl border border-[var(--danger)] p-4 text-sm text-[var(--danger)]">
+          {{ message }}
+          <button type="button" class="ml-2 underline" (click)="refresh()">Erneut versuchen</button>
+        </div>
+      } @else if (store.loading() && !store.loaded()) {
         <!-- Skeleton beim Erstladen -->
         <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
           @for (i of [1, 2, 3, 4, 5, 6, 7, 8]; track i) {
@@ -28,8 +50,27 @@ import { DashboardStore } from './dashboard.store';
           }
         </div>
       } @else {
-        <!-- ── Energie-Bilanz-Widget ─────────────────────────────────── -->
-        @if (store.energyBalance(); as energy) {
+        <!-- ── Einsammel-Ergebnis ─────────────────────────────────────── -->
+        @if (store.lastCollect(); as delta) {
+          <section class="rounded-xl border border-[var(--success)] bg-[var(--surface)] p-4 text-sm">
+            <span class="font-medium text-[var(--success)]">Eingesammelt:</span>
+            @if (delta.produced.length === 0) {
+              <span class="text-[var(--text-muted)]"> nichts Neues (Zeitraum zu kurz oder Lager voll).</span>
+            } @else {
+              @for (item of delta.produced; track item.code) {
+                <span class="ml-2 tabular-nums">+{{ item.amount | compactNumber }} {{ item.code }}</span>
+              }
+            }
+            @for (lost of delta.overflowLost; track lost.code) {
+              <span class="ml-2 tabular-nums text-[var(--warning)]">
+                ({{ lost.amount | compactNumber }} {{ lost.code }} verfallen — Lager voll)
+              </span>
+            }
+          </section>
+        }
+
+        <!-- ── Energie-Bilanz ─────────────────────────────────────────── -->
+        @if (store.energy(); as energy) {
           <section
             class="rounded-xl border bg-[var(--surface)] p-4"
             [class]="store.throttled() ? 'border-[var(--warning)]' : 'border-[var(--border)]'"
@@ -45,148 +86,81 @@ import { DashboardStore } from './dashboard.store';
               </div>
               <span class="text-sm tabular-nums"
                     [class]="store.throttled() ? 'text-[var(--warning)]' : 'text-[var(--success)]'">
-                {{ energy.throttleFactor | percent: '1.0-0' }}
+                {{ energy.throttle | percent: '1.0-0' }}
               </span>
-            </div>
-            <div class="mt-2 h-2 overflow-hidden rounded-full bg-[var(--surface-2)]">
-              <div class="h-full rounded-full transition-all"
-                   [class]="store.throttled() ? 'bg-[var(--warning)]' : 'bg-[var(--success)]'"
-                   [style.width.%]="energy.throttleFactor * 100"></div>
             </div>
             @if (store.throttled()) {
               <p class="mt-2 text-sm text-[var(--warning)]">
-                ⚠ Produktion gedrosselt auf
-                {{ store.energyBalance()!.throttleFactor | percent: '1.0-0' }} —
-                Energieerzeugung ausbauen.
+                ⚠ Produktion gedrosselt — Energieerzeugung ausbauen.
               </p>
             }
           </section>
         }
 
-        <!-- ── Ressourcen-Grid ────────────────────────────────────────── -->
+        <!-- ── Ressourcen mit Kapazität und Rate ──────────────────────── -->
         <section>
           <h2 class="mb-2 text-sm font-medium text-[var(--text-muted)]">Ressourcen</h2>
-          @if (store.storableResources().length === 0) {
+          @if (store.resources().length === 0) {
             <div class="rounded-xl border border-dashed border-[var(--border)] p-8 text-center text-[var(--text-muted)]">
-              Noch keine Ressourcen — <a routerLink="/buildings" class="text-[var(--primary)]">jetzt bauen</a>.
+              Noch keine Ressourcen —
+              <a routerLink="/buildings" class="text-[var(--primary)]">jetzt bauen</a>.
             </div>
           } @else {
             <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-              @for (stock of store.storableResources(); track stock.resource) {
+              @for (row of store.resources(); track row.code) {
                 <div class="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
                   <div class="flex items-baseline justify-between">
-                    <span class="text-sm text-[var(--text-muted)]">{{ stock.resource }}</span>
-                    <span class="text-xs tabular-nums"
-                          [class]="stock.ratePerHour < 0 ? 'text-[var(--danger)]' : 'text-[var(--success)]'">
-                      {{ stock.ratePerHour | compactNumber: true }}/h
-                    </span>
+                    <span class="text-sm text-[var(--text-muted)]">{{ row.name }}</span>
+                    @if (row.netPerHour !== 0) {
+                      <span class="text-xs tabular-nums"
+                            [class]="row.netPerHour < 0 ? 'text-[var(--danger)]' : 'text-[var(--success)]'">
+                        {{ row.netPerHour | compactNumber: true }}/h
+                      </span>
+                    }
                   </div>
                   <div class="mt-1 text-lg font-semibold tabular-nums">
-                    {{ stock.amount | compactNumber }}
+                    {{ row.amount | compactNumber }}
+                    <span class="text-xs font-normal text-[var(--text-muted)]">
+                      / {{ row.capacity | compactNumber }}
+                    </span>
                   </div>
-                  @if (stock.capacity > 0) {
-                    <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--surface-2)]"
-                         [title]="stock.amount + ' / ' + stock.capacity">
-                      <div class="h-full rounded-full"
-                           [class]="fillRatio(stock.amount, stock.capacity) >= 0.9 ? 'bg-[var(--warning)]' : 'bg-[var(--primary)]'"
-                           [style.width.%]="fillRatio(stock.amount, stock.capacity) * 100"></div>
-                    </div>
-                  }
+                  <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--surface-2)]"
+                       [title]="row.amount + ' / ' + row.capacity">
+                    <div class="h-full rounded-full"
+                         [class]="fillRatio(row) >= 0.9 ? 'bg-[var(--warning)]' : 'bg-[var(--primary)]'"
+                         [style.width.%]="fillRatio(row) * 100"></div>
+                  </div>
                 </div>
               }
             </div>
           }
         </section>
 
-        <!-- ── Laufender Bau + aktive Forschung ───────────────────────── -->
-        <section class="grid gap-3 md:grid-cols-2">
-          <div class="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-            <h2 class="text-sm font-medium text-[var(--text-muted)]">🏗 Bau</h2>
-            @if (store.activeConstruction(); as job) {
-              <div class="mt-2 flex items-center justify-between">
-                <span class="font-medium">{{ job.buildingCode }} → L{{ job.targetLevel }}</span>
-                <span class="tabular-nums text-[var(--primary)]">
-                  ⏱ {{ remaining(job.completesAt) }}
-                </span>
-              </div>
-            } @else {
-              <p class="mt-2 text-sm text-[var(--text-muted)]">
-                Kein Bau aktiv —
-                <a routerLink="/buildings" class="text-[var(--primary)]">Gebäude bauen</a>
-              </p>
-            }
-          </div>
-
-          <div class="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-            <h2 class="text-sm font-medium text-[var(--text-muted)]">🔬 Forschung</h2>
-            @if (store.activeResearch(); as job) {
-              <div class="mt-2 flex items-center justify-between">
-                <span class="font-medium">{{ job.name }}</span>
-                <span class="tabular-nums text-[var(--primary)]">
-                  ⏱ {{ remaining(job.completesAt) }}
-                </span>
-              </div>
-            } @else {
-              <p class="mt-2 text-sm text-[var(--text-muted)]">
-                Keine Forschung aktiv —
-                <a routerLink="/research" class="text-[var(--primary)]">Techbaum öffnen</a>
-              </p>
-            }
-          </div>
-        </section>
+        <p class="text-xs text-[var(--text-muted)]">
+          Alle Werte sind serverseitig berechnet (Lazy Production, Serverzeit ist autoritativ).
+          <a routerLink="/buildings" class="text-[var(--primary)]">→ Gebäude bauen/upgraden</a>
+        </p>
       }
     </div>
   `,
 })
 export class DashboardComponent implements OnInit {
   protected readonly store = inject(DashboardStore);
-  readonly #destroyRef = inject(DestroyRef);
-
-  /** 1-s-Tick für Countdowns (nur Anzeige — Zustand kommt immer vom Server). */
-  readonly #now = signal(Date.now());
-  /** Serverzeit-Schätzung: Client-Uhr + Offset (Client-Zeit-Regel, docs/06 §6). */
-  readonly #serverNow = computed(() => this.#now() + this.store.serverOffsetMs());
-
-  /** Bereits behandelte Ablaufzeitpunkte (verhindert Refresh-Spam pro Tick). */
-  readonly #handledExpiries = new Set<string>();
+  protected readonly auth = inject(AuthStore);
 
   ngOnInit(): void {
-    this.store.startPolling();
-    const tick = setInterval(() => {
-      this.#now.set(Date.now());
-      this.#refreshOnExpiry();
-    }, 1000);
-    this.#destroyRef.onDestroy(() => clearInterval(tick));
+    void this.store.refresh();
   }
 
-  /** Läuft ein Countdown ab, holt ein gezielter Refresh den Serverzustand. */
-  #refreshOnExpiry(): void {
-    const jobs = [this.store.activeConstruction(), this.store.activeResearch()];
-    for (const job of jobs) {
-      if (!job) continue;
-      const key = job.completesAt;
-      if (Date.parse(key) <= this.#serverNow() && !this.#handledExpiries.has(key)) {
-        this.#handledExpiries.add(key);
-        void this.store.refresh({ silent: true });
-      }
-    }
+  protected refresh(): void {
+    void this.store.refresh();
   }
 
-  protected fillRatio(amount: number, capacity: number): number {
-    return Math.min(1, amount / capacity);
+  protected collect(): void {
+    void this.store.collect();
   }
 
-  protected remaining(completesAt: string): string {
-    const ms = Date.parse(completesAt) - this.#serverNow();
-    if (ms <= 0) {
-      // Abgelaufen — #refreshOnExpiry() holt den bestätigten Serverzustand
-      return 'fertig …';
-    }
-    const total = Math.floor(ms / 1000);
-    const h = Math.floor(total / 3600);
-    const m = Math.floor((total % 3600) / 60);
-    const s = total % 60;
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+  protected fillRatio(row: { amount: number; capacity: number }): number {
+    return row.capacity > 0 ? Math.min(1, row.amount / row.capacity) : 0;
   }
 }

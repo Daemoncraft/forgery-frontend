@@ -1,108 +1,110 @@
-import { HttpContext } from '@angular/common/http';
-import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
+import { Injectable, computed, inject, signal } from '@angular/core';
 import { ApiClient } from '../../core/api/api-client';
-import { SUPPRESS_ERROR_TOAST } from '../../core/interceptors/error.interceptor';
+import { AuthStore } from '../../core/auth/auth.store';
 import {
-  ConstructionJob,
+  CollectResponse,
   EnergyBalance,
-  ResearchJob,
+  InventoryResponse,
+  ProductionSummaryResponse,
+  ResourceCatalogResponse,
+  ResourceDefinition,
+  ResourceRate,
   ResourceStock,
 } from '../../shared/models/game.models';
 
-/** Dashboard-Aggregat vom Server (GET /api/dashboard). */
-interface DashboardDto {
-  serverTime: string;
-  resources: ResourceStock[];
-  energy: EnergyBalance;
-  activeConstruction: ConstructionJob | null;
-  activeResearch: ResearchJob | null;
+/** Anzeigemodell: Bestand + Rate + Kapazität einer Ressource. */
+export interface ResourceRow {
+  code: string;
+  name: string;
+  amount: number;
+  capacity: number;
+  netPerHour: number;
 }
 
-const POLL_INTERVAL_MS = 30_000; // docs/06 §7: Dashboard 30 s
-
+/**
+ * Dashboard-Zustand aus den echten Backend-Projektionen:
+ * GET /api/production/summary (settlet serverseitig) + GET /api/inventory +
+ * Ressourcen-Katalog. POST /api/production/collect liefert das Einsammel-Delta.
+ * Der Client rechnet nie selbst Bestände hoch — jede Zahl kommt vom Server.
+ */
 @Injectable({ providedIn: 'root' })
 export class DashboardStore {
   readonly #api = inject(ApiClient);
-  readonly #destroyRef = inject(DestroyRef);
+  readonly #auth = inject(AuthStore);
 
-  // ── State (private writable) ───────────────────────────────────────────────
-  readonly #resources = signal<ResourceStock[]>([]);
-  readonly #energyBalance = signal<EnergyBalance | null>(null);
-  readonly #activeConstruction = signal<ConstructionJob | null>(null);
-  readonly #activeResearch = signal<ResearchJob | null>(null);
+  readonly #stocks = signal<ResourceStock[]>([]);
+  readonly #rates = signal<ResourceRate[]>([]);
+  readonly #energy = signal<EnergyBalance | null>(null);
+  readonly #catalog = signal<ResourceDefinition[]>([]);
+  readonly #lastCalculatedAt = signal<string | null>(null);
+  readonly #lastCollect = signal<CollectResponse | null>(null);
   readonly #loading = signal(false);
+  readonly #collecting = signal(false);
   readonly #loaded = signal(false);
-  /** serverTime − clientTime, für Countdowns (Client-Zeit-Regel, docs/06 §6). */
-  readonly #serverOffsetMs = signal(0);
+  readonly #error = signal<string | null>(null);
 
-  #pollTimer: ReturnType<typeof setInterval> | null = null;
-
-  // ── Public readonly ────────────────────────────────────────────────────────
-  readonly resources = this.#resources.asReadonly();
-  readonly energyBalance = this.#energyBalance.asReadonly();
-  readonly activeConstruction = this.#activeConstruction.asReadonly();
-  readonly activeResearch = this.#activeResearch.asReadonly();
+  readonly energy = this.#energy.asReadonly();
+  readonly lastCalculatedAt = this.#lastCalculatedAt.asReadonly();
+  readonly lastCollect = this.#lastCollect.asReadonly();
   readonly loading = this.#loading.asReadonly();
+  readonly collecting = this.#collecting.asReadonly();
   readonly loaded = this.#loaded.asReadonly();
-  readonly serverOffsetMs = this.#serverOffsetMs.asReadonly();
+  readonly error = this.#error.asReadonly();
 
-  // ── Derived ────────────────────────────────────────────────────────────────
-  /** Lagerbare Ressourcen für das Grid (Energie ist Bilanz, kein Bestand). */
-  readonly storableResources = computed(() =>
-    this.#resources().filter(r => r.resource !== 'energy'),
-  );
-
-  readonly throttled = computed(() => {
-    const e = this.#energyBalance();
-    return e !== null && e.throttleFactor < 1;
+  /** Bestände + Raten, sortiert nach Katalog-Reihenfolge; Energie ist Bilanz, kein Bestand. */
+  readonly resources = computed<ResourceRow[]>(() => {
+    const names = new Map(this.#catalog().map(def => [def.code, def.name]));
+    const order = new Map(this.#catalog().map((def, index) => [def.code, index]));
+    const rates = new Map(this.#rates().map(rate => [rate.code, rate.netPerHour]));
+    return this.#stocks()
+      .map(stock => ({
+        code: stock.code,
+        name: names.get(stock.code) ?? stock.code,
+        amount: stock.amount,
+        capacity: stock.capacity,
+        netPerHour: rates.get(stock.code) ?? 0,
+      }))
+      .sort((a, b) => (order.get(a.code) ?? 99) - (order.get(b.code) ?? 99));
   });
 
-  readonly nearCapacity = computed(() =>
-    this.storableResources().filter(
-      r => r.capacity > 0 && r.amount / r.capacity >= 0.9,
-    ),
-  );
+  readonly throttled = computed(() => {
+    const energy = this.#energy();
+    return energy !== null && energy.throttle < 1;
+  });
 
-  // ── Actions ────────────────────────────────────────────────────────────────
-  async refresh(options: { silent?: boolean } = {}): Promise<void> {
-    if (!options.silent) this.#loading.set(true);
+  /** Erstladung/Refresh: Summary settlet, danach konsistenter Inventarstand. */
+  async refresh(): Promise<void> {
+    this.#loading.set(true);
+    this.#error.set(null);
     try {
-      const dto = await this.#api.get<DashboardDto>('dashboard', {
-        // Polling-Fehler nicht als Toast eskalieren
-        context: new HttpContext().set(SUPPRESS_ERROR_TOAST, options.silent ?? false),
-      });
-      this.#resources.set(dto.resources);
-      this.#energyBalance.set(dto.energy);
-      this.#activeConstruction.set(dto.activeConstruction);
-      this.#activeResearch.set(dto.activeResearch);
-      this.#serverOffsetMs.set(Date.parse(dto.serverTime) - Date.now());
+      if (this.#catalog().length === 0) {
+        const catalog = await this.#api.get<ResourceCatalogResponse>('inventory/resources');
+        this.#catalog.set(catalog.resources);
+      }
+      const summary = await this.#api.get<ProductionSummaryResponse>('production/summary');
+      const inventory = await this.#api.get<InventoryResponse>('inventory');
+      this.#rates.set(summary.netRatesPerHour);
+      this.#energy.set(summary.energy);
+      this.#lastCalculatedAt.set(summary.lastCalculatedAt);
+      this.#stocks.set(inventory.resources);
       this.#loaded.set(true);
+    } catch {
+      this.#error.set('Dashboard konnte nicht geladen werden.');
     } finally {
       this.#loading.set(false);
     }
   }
 
-  /** Startet Polling (30 s); pausiert bei verstecktem Tab. Idempotent. */
-  startPolling(): void {
-    if (this.#pollTimer !== null) return;
-    void this.refresh();
-    this.#pollTimer = setInterval(() => {
-      if (!document.hidden) void this.refresh({ silent: true });
-    }, POLL_INTERVAL_MS);
-    document.addEventListener('visibilitychange', this.#onVisibility);
-    this.#destroyRef.onDestroy(() => this.stopPolling());
-  }
-
-  stopPolling(): void {
-    if (this.#pollTimer !== null) {
-      clearInterval(this.#pollTimer);
-      this.#pollTimer = null;
+  /** Produktion einsammeln (serverseitiges Settlement) und Anzeige nachziehen. */
+  async collect(): Promise<void> {
+    this.#collecting.set(true);
+    try {
+      const delta = await this.#api.post<CollectResponse>('production/collect');
+      this.#lastCollect.set(delta);
+      await this.refresh();
+      await this.#auth.reloadProfile();
+    } finally {
+      this.#collecting.set(false);
     }
-    document.removeEventListener('visibilitychange', this.#onVisibility);
   }
-
-  /** Sofort-Refresh bei Rückkehr in den Tab. */
-  readonly #onVisibility = (): void => {
-    if (!document.hidden) void this.refresh({ silent: true });
-  };
 }
