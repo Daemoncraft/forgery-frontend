@@ -5,21 +5,32 @@
  * der Client rechnet nie selbst Bestände hoch).
  */
 
-// ── Auth (POST /api/auth/login | /refresh, GET /api/auth/me) ─────────────────
+// ── Auth (POST /api/auth/register|login|refresh|logout, GET /api/auth/me) ────
+// Das Refresh-Token lebt ausschließlich im httpOnly-Cookie — es taucht in
+// keiner Response auf und wird nie im Client gespeichert.
 
 export interface TokenResponse {
-  playerId: string;
-  username: string;
   accessToken: string;
   accessTokenExpiresInSeconds: number;
-  refreshToken: string;
-  refreshTokenExpiresInSeconds: number;
+  /** Absoluter Ablauf (Serverzeit) für die Silent-Refresh-Planung. */
+  expiresAt: string;
+  user: PlayerProfile;
+}
+
+export interface RegisterRequest {
+  email: string;
+  username: string;
+  displayName?: string;
+  password: string;
+  acceptedTerms: boolean;
 }
 
 export type PlayerRole = 'PLAYER' | 'MODERATOR' | 'GAME_MASTER' | 'ADMIN';
 
 export interface PlayerProfile {
+  userId: string;
   playerId: string;
+  email: string;
   username: string;
   displayName: string | null;
   roles: PlayerRole[];
@@ -27,6 +38,14 @@ export interface PlayerProfile {
   level: number;
   xp: number;
   buildingSlots: number;
+}
+
+/** RFC-7807-Fehler, aufbereitet für die Anzeige in Auth-Formularen. */
+export interface AuthError {
+  message: string;
+  code?: string;
+  /** Feldname → Meldung (z. B. email → "bereits registriert"). */
+  fieldErrors: Record<string, string>;
 }
 
 // ── Inventory (GET /api/inventory, GET /api/inventory/resources) ─────────────
