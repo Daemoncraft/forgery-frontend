@@ -147,8 +147,10 @@ export class RegisterComponent {
       return 'Die Passwörter stimmen nicht überein.';
     }
     if (!control.errors) return null;
-    if (control.errors['required']) return 'Pflichtfeld.';
-    if (control.errors['requiredTrue']) return 'Bitte akzeptiere die Nutzungsbedingungen.';
+    if (control.errors['required']) {
+      // Validators.requiredTrue meldet ebenfalls unter dem Key 'required'
+      return field === 'acceptedTerms' ? 'Bitte akzeptiere die Nutzungsbedingungen.' : 'Pflichtfeld.';
+    }
     if (control.errors['email']) return 'Keine gültige E-Mail-Adresse.';
     if (control.errors['maxlength']) return 'Zu lang.';
     if (control.errors['pattern']) return '3–24 Zeichen, nur Buchstaben, Ziffern, _ und -.';
