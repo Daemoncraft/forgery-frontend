@@ -1,6 +1,8 @@
 import {
   ApplicationConfig,
+  inject,
   isDevMode,
+  provideAppInitializer,
   provideZonelessChangeDetection,
 } from '@angular/core';
 import { provideRouter, withComponentInputBinding, withViewTransitions } from '@angular/router';
@@ -11,12 +13,15 @@ import { MessageService } from 'primeng/api';
 import { provideEchartsCore } from 'ngx-echarts';
 
 import { routes } from './app.routes';
+import { AuthStore } from './core/auth/auth.store';
 import { authInterceptor } from './core/interceptors/auth.interceptor';
 import { errorInterceptor } from './core/interceptors/error.interceptor';
 
 export const appConfig: ApplicationConfig = {
   providers: [
     provideZonelessChangeDetection(),
+    // Session-Restore vor dem ersten Routing (Refresh-Token → /auth/me)
+    provideAppInitializer(() => inject(AuthStore).restoreSession()),
     provideRouter(routes, withComponentInputBinding(), withViewTransitions()),
     provideHttpClient(
       withInterceptors([authInterceptor, errorInterceptor]),
